@@ -133,6 +133,7 @@ jobs:
           bash ./scripts/copy-jieba-dict.sh "${ARCHIVE}"
           cp -r web/* "${ARCHIVE}/web/"
           cp .env.lite.example "${ARCHIVE}/"
+          cp .env.lite.example "${ARCHIVE}/.env.lite"
           cp docs/LITE.md "${ARCHIVE}/README.md"
           if [ -d config ]; then
             cp -r config "${ARCHIVE}/config"
@@ -167,7 +168,6 @@ jobs:
           $unpacked = Join-Path $env:RUNNER_TEMP 'lite-smoke'
           Expand-Archive -LiteralPath $env:ARCHIVE_FILE -DestinationPath $unpacked
           $release = Join-Path $unpacked ([IO.Path]::GetFileNameWithoutExtension($env:ARCHIVE_FILE))
-          Copy-Item (Join-Path $release '.env.lite.example') (Join-Path $release '.env.lite')
           $stdout = Join-Path $unpacked 'stdout.log'
           $stderr = Join-Path $unpacked 'stderr.log'
           $server = Start-Process -FilePath (Join-Path $release 'WeKnora-lite.exe') -WorkingDirectory $release -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
@@ -436,9 +436,7 @@ jobs:
           tar xzf WeKnora-lite_${{ steps.ver.outputs.version }}_<os>_<arch>.tar.gz
           cd WeKnora-lite_${{ steps.ver.outputs.version }}_<os>_<arch>
 
-          # 2. 配置
-          cp .env.lite.example .env.lite
-          # 编辑 .env.lite，至少确认 OLLAMA_BASE_URL 正确
+          # 2. 按需编辑发行包中的 .env.lite，确认 OLLAMA_BASE_URL
 
           # 3. 启动 Ollama（如尚未运行）
           ollama serve &
@@ -446,7 +444,6 @@ jobs:
           ollama pull nomic-embed-text
 
           # 4. 运行
-          set -a && source .env.lite && set +a
           ./WeKnora-lite
           # 访问 http://localhost:8080
           ```
@@ -462,7 +459,6 @@ jobs:
           Windows 上解压 ZIP 后，在解压目录中打开 PowerShell，执行：
 
           ```powershell
-          Copy-Item .env.lite.example .env.lite
           .\WeKnora-lite.exe
           ```
 

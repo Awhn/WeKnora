@@ -17,7 +17,7 @@ Lite 面向希望快速在本地使用、部署尽量简单的场景；标准版
 
 ## 配置文件
 
-直接运行 `WeKnora-lite` 时，程序会自动读取 `.env.lite`——先找程序所在目录（发行包解压后的目录结构），再找当前目录，无需手动 `source`。复制发行包里的 `.env.lite.example` 为 `.env.lite` 即可开始配置。注意：
+直接运行 `WeKnora-lite` 时，程序会自动读取 `.env.lite`——先找程序所在目录（发行包解压后的目录结构），再找当前目录，无需手动 `source`。命令行发行包提供默认的 `.env.lite`；需要恢复默认值时，可使用附带的 `.env.lite.example`。注意：
 
 - 只有 Lite 构建的二进制会做这件事；标准版二进制不会自动读取任何 dotenv 文件。
 - 不再用 `.env` 做补充：`.env.lite` 是 Lite 唯一的文件配置来源，避免标准版模板里的 `REDIS_ADDR`、Langfuse 凭据等变量意外切走 Lite 的内存队列或打开链路追踪。
@@ -30,7 +30,6 @@ Lite 面向希望快速在本地使用、部署尽量简单的场景；标准版
 下载并解压 `WeKnora-lite_<版本>_windows_amd64.zip`，在解压目录打开 PowerShell：
 
 ```powershell
-Copy-Item .env.lite.example .env.lite
 .\WeKnora-lite.exe
 ```
 
