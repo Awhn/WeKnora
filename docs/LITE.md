@@ -35,3 +35,9 @@ Copy-Item .env.lite.example .env.lite
 ```
 
 启动后访问 <http://localhost:8080>。
+
+如果启动后立即退出，在同一个 PowerShell 窗口运行以下命令，查看并保存启动日志：
+
+```powershell
+.\WeKnora-lite.exe 2>&1 | Tee-Object -FilePath .\weknora-startup.log
+```

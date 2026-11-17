@@ -15,6 +15,19 @@ var Jieba *gojieba.Jieba = newJieba()
 func newJieba() *gojieba.Jieba {
 	dictDir := os.Getenv("JIEBA_DICT_DIR")
 	if dictDir == "" {
+		if exe, err := os.Executable(); err == nil {
+			bundled := filepath.Join(filepath.Dir(exe), "jieba-dict")
+			if info, err := os.Stat(bundled); err == nil && info.IsDir() {
+				dictDir = bundled
+				if cwd, err := os.Getwd(); err == nil && filepath.Clean(cwd) == filepath.Dir(exe) {
+					// CppJieba uses narrow file paths on Windows. A relative
+					// path also works when the package directory has Unicode.
+					dictDir = "jieba-dict"
+				}
+			}
+		}
+	}
+	if dictDir == "" {
 		return gojieba.NewJieba()
 	}
 
