@@ -1,9 +1,12 @@
 name: Release Lite Binaries
 
 on:
-  # push:
-  #   tags:
-  #     - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/release-lite.yml"
+      - "internal/types/evaluation.go"
+      - "scripts/copy-jieba-dict.sh"
+      - "scripts/prepare-windows-build.sh"
   workflow_dispatch:
     inputs:
       tag:
@@ -15,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   NODE_VERSION: "22"
@@ -54,22 +57,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - os: ubuntu-24.04-arm
-            goos: linux
-            goarch: arm64
-          - os: macos-15-intel
-            goos: darwin
-            goarch: amd64
-          - os: macos-15
-            goos: darwin
-            goarch: arm64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' &&
+            '[{"os":"windows-latest","goos":"windows","goarch":"amd64"}]' ||
+            '[
+              {"os":"ubuntu-latest","goos":"linux","goarch":"amd64"},
+              {"os":"ubuntu-24.04-arm","goos":"linux","goarch":"arm64"},
+              {"os":"macos-15-intel","goos":"darwin","goarch":"amd64"},
+              {"os":"macos-15","goos":"darwin","goarch":"arm64"},
+              {"os":"windows-latest","goos":"windows","goarch":"amd64"}
+            ]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -96,7 +93,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          VERSION="${RELEASE_TAG:-${GITHUB_REF#refs/tags/}}"
+          VERSION="${RELEASE_TAG:-dev-${GITHUB_SHA:0:7}}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building ${VERSION} for ${GOOS}/${GOARCH}"
 
@@ -133,8 +130,10 @@ jobs:
           mkdir -p "${ARCHIVE}/web"
           cp "WeKnora-lite$(go env GOEXE)" "${ARCHIVE}/"
           bash ./scripts/copy-licenses.sh "${ARCHIVE}"
+          bash ./scripts/copy-jieba-dict.sh "${ARCHIVE}"
           cp -r web/* "${ARCHIVE}/web/"
           cp .env.lite.example "${ARCHIVE}/"
+          cp .env.lite.example "${ARCHIVE}/.env.lite"
           cp docs/LITE.md "${ARCHIVE}/README.md"
           if [ -d config ]; then
             cp -r config "${ARCHIVE}/config"
@@ -157,6 +156,31 @@ jobs:
           fi
           echo "file=${PACKAGE}" >> "$GITHUB_OUTPUT"
 
+      - name: Smoke test Windows ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE_FILE: ${{ steps.package.outputs.file }}
+          DUCKDB_SKIP_EXTENSION_LOAD: "1"
+          SERVER_HOST: "127.0.0.1"
+          SERVER_PORT: "18080"
+        run: |
+          $unpacked = Join-Path $env:RUNNER_TEMP 'lite-smoke'
+          Expand-Archive -LiteralPath $env:ARCHIVE_FILE -DestinationPath $unpacked
+          $release = Join-Path $unpacked ([IO.Path]::GetFileNameWithoutExtension($env:ARCHIVE_FILE))
+          $stdout = Join-Path $unpacked 'stdout.log'
+          $stderr = Join-Path $unpacked 'stderr.log'
+          $server = Start-Process -FilePath (Join-Path $release 'WeKnora-lite.exe') -WorkingDirectory $release -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            curl.exe --fail --silent --show-error --retry 45 --retry-connrefused --retry-delay 1 --max-time 3 http://127.0.0.1:18080/health
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content $stdout, $stderr -Tail 80
+              throw 'WeKnora Lite did not reach /health.'
+            }
+          } finally {
+            if (!$server.HasExited) { Stop-Process -Id $server.Id }
+          }
+
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -168,6 +192,7 @@ jobs:
 
   # ── 2b. Build Desktop APP per platform (Wails) ──
   build-desktop-app:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -369,7 +394,10 @@ jobs:
   # ── 3. Create GitHub Release ──
   release:
     needs: [build-binary, build-desktop-app]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
@@ -408,9 +436,7 @@ jobs:
           tar xzf WeKnora-lite_${{ steps.ver.outputs.version }}_<os>_<arch>.tar.gz
           cd WeKnora-lite_${{ steps.ver.outputs.version }}_<os>_<arch>
 
-          # 2. 配置
-          cp .env.lite.example .env.lite
-          # 编辑 .env.lite，至少确认 OLLAMA_BASE_URL 正确
+          # 2. 按需编辑发行包中的 .env.lite，确认 OLLAMA_BASE_URL
 
           # 3. 启动 Ollama（如尚未运行）
           ollama serve &
@@ -418,7 +444,6 @@ jobs:
           ollama pull nomic-embed-text
 
           # 4. 运行
-          set -a && source .env.lite && set +a
           ./WeKnora-lite
           # 访问 http://localhost:8080
           ```
@@ -434,7 +459,6 @@ jobs:
           Windows 上解压 ZIP 后，在解压目录中打开 PowerShell，执行：
 
           ```powershell
-          Copy-Item .env.lite.example .env.lite
           .\WeKnora-lite.exe
           ```
 
@@ -472,6 +496,8 @@ jobs:
   update-homebrew:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:

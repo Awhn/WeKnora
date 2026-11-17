@@ -69,10 +69,12 @@ mkdir -p "${DIST_DIR}/web"
 
 cp WeKnora-lite "${DIST_DIR}/"
 bash ./scripts/copy-licenses.sh "${DIST_DIR}"
+bash ./scripts/copy-jieba-dict.sh "${DIST_DIR}"
 if [ -d web ] && [ -f web/index.html ]; then
     cp -r web/* "${DIST_DIR}/web/"
 fi
 cp .env.lite.example "${DIST_DIR}/"
+cp .env.lite.example "${DIST_DIR}/.env.lite"
 cp docs/LITE.md "${DIST_DIR}/README.md"
 if [ -d config ]; then
     cp -r config "${DIST_DIR}/config"
