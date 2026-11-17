@@ -24,3 +24,14 @@ Lite 面向希望快速在本地使用、部署尽量简单的场景；标准版
 - 如需指定其他文件，可设置 `ENV_FILE` 环境变量（标准版同样生效）。
 - 命令行或服务管理器中已经设置的环境变量优先于配置文件。
 - 写在 `.env.lite` 里的 `LOG_LEVEL` / `LOG_PATH` 会生效（加载后会重新应用日志配置）。
+
+## Windows x64 命令行部署
+
+下载并解压 `WeKnora-lite_<版本>_windows_amd64.zip`，在解压目录打开 PowerShell：
+
+```powershell
+Copy-Item .env.lite.example .env.lite
+.\WeKnora-lite.exe
+```
+
+启动后访问 <http://localhost:8080>。

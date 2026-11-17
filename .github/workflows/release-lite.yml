@@ -18,7 +18,6 @@ permissions:
   contents: write
 
 env:
-  GO_VERSION: "1.24"
   NODE_VERSION: "22"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
@@ -37,6 +36,8 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           npm ci
           npm run build
@@ -60,21 +61,29 @@ jobs:
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          - os: macos-14
+          - os: macos-15-intel
             goos: darwin
             goarch: amd64
-          - os: macos-14
+          - os: macos-15
             goos: darwin
             goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     env:
       CGO_ENABLED: 1
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
           cache: true
 
       - uses: actions/download-artifact@v8
@@ -84,32 +93,45 @@ jobs:
 
       - name: Resolve version
         id: ver
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            VERSION="${{ inputs.tag }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
+          VERSION="${RELEASE_TAG:-${GITHUB_REF#refs/tags/}}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Building ${VERSION} for ${{ matrix.goos }}/${{ matrix.goarch }}"
+          echo "Building ${VERSION} for ${GOOS}/${GOARCH}"
+
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        id: msys2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Prepare Windows build
+        if: runner.os == 'Windows'
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: bash ./scripts/prepare-windows-build.sh
 
       - name: Build
         run: |
           export EDITION=lite
-          eval "$(./scripts/get_version.sh env)"
-          LDFLAGS="-w -s $(./scripts/get_version.sh ldflags)"
+          LDFLAGS="-w -s $(./scripts/get_version.sh ldflags) -X google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn"
           export CGO_CFLAGS="-Wno-deprecated-declarations"
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
+          if [ "$GOOS" = "darwin" ]; then
             export CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries"
           fi
           go build -tags "sqlite_fts5" -ldflags="${LDFLAGS}" \
-            -o WeKnora-lite ./cmd/server
+            -o "WeKnora-lite$(go env GOEXE)" ./cmd/server
 
-      - name: Package tarball
+      - name: Package Web CLI
+        id: package
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          ARCHIVE="WeKnora-lite_${{ steps.ver.outputs.version }}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          ARCHIVE="WeKnora-lite_${RELEASE_VERSION}_${GOOS}_${GOARCH}"
           mkdir -p "${ARCHIVE}/web"
-          cp WeKnora-lite "${ARCHIVE}/"
+          cp "WeKnora-lite$(go env GOEXE)" "${ARCHIVE}/"
           bash ./scripts/copy-licenses.sh "${ARCHIVE}"
           cp -r web/* "${ARCHIVE}/web/"
           cp .env.lite.example "${ARCHIVE}/"
@@ -121,18 +143,27 @@ jobs:
             mkdir -p "${ARCHIVE}/migrations/sqlite"
             cp -r migrations/sqlite/* "${ARCHIVE}/migrations/sqlite/"
           fi
-          if [ -f deploy/weknora-lite.service ]; then
+          if [ "$GOOS" != "windows" ] && [ -f deploy/weknora-lite.service ]; then
             cp deploy/weknora-lite.service "${ARCHIVE}/"
           fi
-          tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
-          shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
+          if [ "$GOOS" = "windows" ]; then
+            PACKAGE="${ARCHIVE}.zip"
+            "$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -a -cf "$PACKAGE" "$ARCHIVE"
+            sha256sum "$PACKAGE" > "${PACKAGE}.sha256"
+          else
+            PACKAGE="${ARCHIVE}.tar.gz"
+            tar czf "$PACKAGE" "$ARCHIVE"
+            shasum -a 256 "$PACKAGE" > "${PACKAGE}.sha256"
+          fi
+          echo "file=${PACKAGE}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
-            WeKnora-lite_*.tar.gz
-            WeKnora-lite_*.tar.gz.sha256
+            ${{ steps.package.outputs.file }}
+            ${{ steps.package.outputs.file }}.sha256
+          if-no-files-found: error
           retention-days: 3
 
   # ── 2b. Build Desktop APP per platform (Wails) ──
@@ -141,15 +172,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             platform: darwin/universal
             arch_label: macOS_universal
             artifact_name: desktop-macos-universal
-          - os: macos-14
+          - os: macos-15-intel
             platform: darwin/amd64
             arch_label: macOS_amd64
             artifact_name: desktop-macos-amd64
-          - os: macos-14
+          - os: macos-15
             platform: darwin/arm64
             arch_label: macOS_arm64
             artifact_name: desktop-macos-arm64
@@ -169,7 +200,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
           cache: true
 
       - uses: actions/setup-node@v6
@@ -190,6 +221,20 @@ jobs:
       - name: Install NSIS (Windows)
         if: runner.os == 'Windows'
         run: choco install nsis -y
+
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        id: msys2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Prepare Windows build
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: bash ./scripts/prepare-windows-build.sh
 
       - name: Resolve version
         id: ver
@@ -384,6 +429,14 @@ jobs:
           | `WeKnora-lite_*_linux_arm64.tar.gz` | Linux ARM64 |
           | `WeKnora-lite_*_darwin_amd64.tar.gz` | macOS Intel |
           | `WeKnora-lite_*_darwin_arm64.tar.gz` | macOS Apple Silicon |
+          | `WeKnora-lite_*_windows_amd64.zip` | Windows x86_64 |
+
+          Windows 上解压 ZIP 后，在解压目录中打开 PowerShell，执行：
+
+          ```powershell
+          Copy-Item .env.lite.example .env.lite
+          .\WeKnora-lite.exe
+          ```
 
           ---
 
@@ -411,7 +464,9 @@ jobs:
             --notes-file notes.md \
             WeKnora-lite_*.tar.gz \
             WeKnora-lite_*.tar.gz.sha256 \
-            WeKnora-Lite-App_* || true
+            WeKnora-lite_*.zip \
+            WeKnora-lite_*.zip.sha256 \
+            WeKnora-Lite-App_*
 
   # ── 4. Update Homebrew Formula ──
   update-homebrew:
